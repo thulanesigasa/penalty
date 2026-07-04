@@ -1,0 +1,15 @@
+{
+  "python.analysis.extraPaths": [
+    "./backend",
+    "./automation",
+    "./backend/venv/Lib/site-packages",
+    "./automation/venv/Lib/site-packages"
+  ],
+  "python.autoComplete.extraPaths": [
+    "./backend",
+    "./automation",
+    "./backend/venv/Lib/site-packages",
+    "./automation/venv/Lib/site-packages"
+  ],
+  "css.lint.unknownAtRules": "ignore"
+}

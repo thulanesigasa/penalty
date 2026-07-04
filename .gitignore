@@ -1,0 +1,37 @@
+# Version control ignores
+
+# Virtual Environments
+**/venv/
+**/.venv/
+ENV/
+env/
+
+# Python Cache & Logs
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+**/.pytest_cache/
+**/.ruff_cache/
+**/checkpoints/
+
+# Node dependencies
+**/node_modules/
+**/.next/
+**/out/
+**/build/
+**/.env*.local
+
+# Databases & local logs
+**/*.db
+**/*.sqlite
+**/data/penalty_games.db
+
+# Environments files
+**/.env
+**/.env.production
+**/.env.development
+
+# VS Code settings (optional, but keep settings.json to share paths)
+.vscode/ipch/
+.vscode/chrome-debug-profile/
