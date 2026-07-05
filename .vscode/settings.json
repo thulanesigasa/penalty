@@ -1,5 +1,5 @@
 {
-  "python.defaultInterpreterPath": "${workspaceFolder}/automation/venv/Scripts/python.exe",
+  "python.defaultInterpreterPath": "d:/shortterm_achievables/penalty/automation/venv/Scripts/python.exe",
   "python.analysis.extraPaths": [
     "d:/shortterm_achievables/penalty/backend",
     "d:/shortterm_achievables/penalty/automation",
