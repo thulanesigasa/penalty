@@ -2,7 +2,8 @@ import os
 import json
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from sqlmodel import Session, select, desc, func
+from sqlmodel import select, desc, func
+from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import create_db_and_tables, get_session
 from app.models import GameRecord
 from app.services.websocket_manager import manager
@@ -19,34 +20,38 @@ app.add_middleware(
 )
 
 @app.on_event("startup")
-def on_startup():
-    create_db_and_tables()
+async def on_startup():
+    await create_db_and_tables()
 
 @app.get("/api/health")
 def health():
     return {"status": "ok"}
 
 @app.get("/api/history")
-def get_history(limit: int = 100, db: Session = Depends(get_session)):
+async def get_history(limit: int = 100, db: AsyncSession = Depends(get_session)):
     statement = select(GameRecord).order_by(desc(GameRecord.id)).limit(limit)
-    results = db.exec(statement).all()
+    result = await db.execute(statement)
+    results = list(result.scalars().all())
     # Reverse to keep chronological ordering for charts
     results.reverse()
     return results
 
 @app.get("/api/stats")
-def get_stats(db: Session = Depends(get_session)):
+async def get_stats(db: AsyncSession = Depends(get_session)):
     # Total count
-    total_count = db.exec(select(func.count(GameRecord.id))).first() or 0
+    total_count_result = await db.execute(select(func.count(GameRecord.id)))
+    total_count = total_count_result.scalar() or 0
     if total_count == 0:
         return {"total_iterations": 0, "win_rate": 0.0, "total_profit": 0.0}
 
     # Total wins
-    total_wins = db.exec(select(func.count(GameRecord.id)).where(GameRecord.outcome == "WIN")).first() or 0
+    wins_result = await db.execute(select(func.count(GameRecord.id)).where(GameRecord.outcome == "WIN"))
+    total_wins = wins_result.scalar() or 0
     win_rate = (total_wins / total_count) if total_count > 0 else 0.0
 
     # Total profit
-    total_profit = db.exec(select(func.sum(GameRecord.profit_loss))).first() or 0.0
+    profit_result = await db.execute(select(func.sum(GameRecord.profit_loss)))
+    total_profit = profit_result.scalar() or 0.0
 
     return {
         "total_iterations": total_count,
@@ -73,7 +78,7 @@ async def websocket_dashboard(websocket: WebSocket):
 @app.websocket("/ws/bot")
 async def websocket_bot(websocket: WebSocket):
     await manager.connect_bot(websocket)
-    from app.database import engine
+    from app.database import async_session_maker
     try:
         while True:
             data = await websocket.receive_text()
@@ -82,7 +87,7 @@ async def websocket_bot(websocket: WebSocket):
                 # If telemetry logs payload, write to DB
                 if msg.get("type") == "telemetry":
                     record_data = msg.get("payload", {})
-                    with Session(engine) as db:
+                    async with async_session_maker() as db:
                         record = GameRecord(
                             iteration=record_data.get("iteration"),
                             target_shot=record_data.get("target_shot"),
@@ -93,7 +98,7 @@ async def websocket_bot(websocket: WebSocket):
                             win_rate=record_data.get("win_rate")
                         )
                         db.add(record)
-                        db.commit()
+                        await db.commit()
                 # Broadcast logs or live visual states to frontend dashboards
                 await manager.broadcast_to_dashboards(msg)
             except Exception as e:

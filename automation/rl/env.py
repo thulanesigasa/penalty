@@ -76,7 +76,7 @@ class PenaltyEnv(gym.Env):
     async def step(self, action: int) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
         """
         Executes a shootout shot.
-        Calculates rewards using a risk-adjusted utility function to optimize profit vs drawdown metrics.
+        Enforces a reward structure of +1.0 for a score/win, and -1.0 for a save/loss.
         """
         # Heavy penalty reward if we attempt to click an already targeted cell
         if self.grid_status[action] == 1.0:
@@ -91,16 +91,11 @@ class PenaltyEnv(gym.Env):
             
             terminated = not success or self.hit_count == 12
             
-            # Loss yields negative reward, Win yields incremental returns
+            # +1.0 for a score/win, -1.0 for a save/loss
             if not success:
-                reward = -self.stake
+                reward = -1.0
             else:
-                # Risk management: scale reward downwards as target hit count increases.
-                # This penalizes greed, mirrors drawdown protection, and stabilizes optimization curves.
-                base_payout = self.stake * (self.multipliers[self.hit_count] - self.multipliers[self.hit_count - 1])
-                risk_aversion = 0.35
-                safety_multiplier = 1.0 - risk_aversion * (self.hit_count / 12.0)
-                reward = base_payout * safety_multiplier
+                reward = 1.0
                 
             info = {
                 "invalid": False,
@@ -118,20 +113,17 @@ class PenaltyEnv(gym.Env):
             
             if is_saved:
                 self.grid_status[action] = 1.0
-                reward = -self.stake
+                reward = -1.0
                 terminated = True
                 outcome = "LOSS"
                 payout = 0.0
             else:
                 self.grid_status[action] = 1.0
                 self.hit_count += 1
-                
-                # Risk management: scale reward downwards as target hit count increases
                 new_mult = self.multipliers[self.hit_count]
-                base_payout = self.stake * (new_mult - self.current_mult)
-                risk_aversion = 0.35
-                safety_multiplier = 1.0 - risk_aversion * (self.hit_count / 12.0)
-                reward = base_payout * safety_multiplier
+                
+                # +1.0 for a score/win, -1.0 for a save/loss
+                reward = 1.0
                 
                 self.current_mult = new_mult
                 terminated = (self.hit_count == 12)

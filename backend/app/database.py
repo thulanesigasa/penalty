@@ -1,30 +1,44 @@
 import os
-from sqlmodel import SQLModel, create_engine, Session
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.orm import sessionmaker
+from sqlmodel import SQLModel
 
-# Set target SQLite database location. Default to data/penalty_games.db
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///../data/penalty_games.db")
+# Configure async SQLite connection via aiosqlite driver
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///../data/penalty_games.db")
 
-# SQLite specific argument connect_args={"check_same_thread": False} allows multiple worker threads
-engine = create_engine(
+if DATABASE_URL.startswith("sqlite:///"):
+    DATABASE_URL = DATABASE_URL.replace("sqlite:///", "sqlite+aiosqlite:///")
+
+# Async SQLite engine
+engine = create_async_engine(
     DATABASE_URL,
     connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {}
 )
 
-def create_db_and_tables():
-    """
-    Creates SQLite database file and initial schemas if they do not exist.
-    """
-    db_path = DATABASE_URL.replace("sqlite:///", "")
-    if "sqlite:" in DATABASE_URL:
-        db_dir = os.path.dirname(db_path)
-        if db_dir and not os.path.exists(db_dir):
-            os.makedirs(db_dir, exist_ok=True)
-    SQLModel.metadata.create_all(engine)
+# Async Session factory
+async_session_maker = sessionmaker(
+    engine, class_=AsyncSession, expire_on_commit=False
+)
 
-def get_session():
+async def create_db_and_tables():
     """
-    FastAPI dependency injection utility. Yields a new database session
-    and closes it when the HTTP request has finished.
+    Asynchronously initializes folders, databases, and schemas.
     """
-    with Session(engine) as session:
+    if "sqlite" in DATABASE_URL:
+        db_parts = DATABASE_URL.split(":///")
+        if len(db_parts) > 1:
+            db_path = db_parts[1]
+            db_dir = os.path.dirname(db_path)
+            if db_dir and not os.path.exists(db_dir):
+                os.makedirs(db_dir, exist_ok=True)
+
+    async with engine.begin() as conn:
+        # Execute metadata table creation asynchronously
+        await conn.run_sync(SQLModel.metadata.create_all)
+
+async def get_session():
+    """
+    Asynchronous FastAPI dependency injector. Yields an active AsyncSession.
+    """
+    async with async_session_maker() as session:
         yield session
