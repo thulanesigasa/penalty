@@ -1,16 +1,24 @@
 {
   "python.defaultInterpreterPath": "${workspaceFolder}/automation/venv/Scripts/python.exe",
   "python.analysis.extraPaths": [
-    "${workspaceFolder}/backend",
-    "${workspaceFolder}/automation",
-    "${workspaceFolder}/backend/venv/Lib/site-packages",
-    "${workspaceFolder}/automation/venv/Lib/site-packages"
+    "d:/shortterm_achievables/penalty/backend",
+    "d:/shortterm_achievables/penalty/automation",
+    "d:/shortterm_achievables/penalty/backend/venv/Lib/site-packages",
+    "d:/shortterm_achievables/penalty/automation/venv/Lib/site-packages",
+    "backend",
+    "automation",
+    "backend/venv/Lib/site-packages",
+    "automation/venv/Lib/site-packages"
   ],
   "python.autoComplete.extraPaths": [
-    "${workspaceFolder}/backend",
-    "${workspaceFolder}/automation",
-    "${workspaceFolder}/backend/venv/Lib/site-packages",
-    "${workspaceFolder}/automation/venv/Lib/site-packages"
+    "d:/shortterm_achievables/penalty/backend",
+    "d:/shortterm_achievables/penalty/automation",
+    "d:/shortterm_achievables/penalty/backend/venv/Lib/site-packages",
+    "d:/shortterm_achievables/penalty/automation/venv/Lib/site-packages",
+    "backend",
+    "automation",
+    "backend/venv/Lib/site-packages",
+    "automation/venv/Lib/site-packages"
   ],
   "css.lint.unknownAtRules": "ignore"
 }
