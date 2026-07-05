@@ -1,6 +1,5 @@
 import os
 import json
-import time
 import asyncio
 import numpy as np
 from dotenv import load_dotenv
@@ -10,54 +9,76 @@ from rl.env import PenaltyEnv
 from rl.agent import DQNAgent
 from browser.controller import BrowserController
 
-# Load environment configs
+# Load shared environment configurations
 load_dotenv()
 
 BACKEND_WS_URL = os.getenv("BACKEND_WS_URL", "ws://localhost:8000/ws/bot")
 CHROME_DEBUG_WS = os.getenv("CHROME_DEBUG_WS", "http://localhost:9222")
 
 class AutomationOrchestrator:
+    """
+    Orchestrates the reinforcement learning execution loop.
+    Asynchronously links browser actions, DQN predictions, database updates,
+    and FastAPI WebSocket logs broadcast.
+    """
     def __init__(self):
         self.is_running = False
         self.bet_amount = 1.0
-        self.delay_speed = 1.0 # delay between actions in seconds
+        self.delay_speed = 1.0  # seconds delay between actions
         
-        # Initialize browser controller and RL environment
+        # Instantiate async-ready components
         self.controller = BrowserController(CHROME_DEBUG_WS)
         self.env = PenaltyEnv(controller=self.controller, stake=self.bet_amount)
         self.agent = DQNAgent(state_dim=13, action_dim=12)
         
-        # Training hyperparams
+        # DQN exploration rate variables
         self.epsilon = 1.0
         self.epsilon_min = 0.05
-        self.epsilon_decay = 0.9995  # decayed over iterations
+        self.epsilon_decay = 0.9995
         
-        # Statistics
+        # Live counters
         self.iteration = 0
         self.wins = 0
         self.losses = 0
         self.total_profit = 0.0
 
     async def connect_and_loop(self):
-        print(f"Connecting to Backend WebSocket at: {BACKEND_WS_URL}")
-        retry_delay = 2
+        """
+        Launches the browser, prompts manual login handoff, and boots up
+        the WebSocket event listeners.
+        """
+        print("[Orchestrator] Initializing browser session...")
+        await self.controller.connect(headless=False)
+        
+        # Pause execution to allow manual demo account sign-in
+        await self.controller.pause_for_login(target_url="penalty")
+        
+        print(f"[Orchestrator] Connecting to API WebSocket: {BACKEND_WS_URL}")
+        retry_delay = 2.0
+        
         while True:
             try:
                 async with websockets.connect(BACKEND_WS_URL) as ws:
-                    print("Connected to API Bridge successfully!")
+                    print("[Orchestrator] Connected to WebSocket bridge successfully.")
+                    retry_delay = 2.0  # reset retry interval
                     
-                    # Spawn listener for backend commands (START/STOP/SET_SPEED)
+                    # Run backend instruction listener and AI loop concurrently
                     listen_task = asyncio.create_task(self.listen_commands(ws))
-                    # Run training step generator loop
                     loop_task = asyncio.create_task(self.agent_loop(ws))
                     
                     await asyncio.gather(listen_task, loop_task)
             except (websockets.exceptions.ConnectionClosed, ConnectionRefusedError) as e:
-                print(f"WebSocket disconnected: {e}. Retrying in {retry_delay}s...")
+                print(f"[Orchestrator] WebSocket disconnected: {e}. Reconnecting in {retry_delay}s...")
                 await asyncio.sleep(retry_delay)
-                retry_delay = min(retry_delay * 1.5, 30)
+                retry_delay = min(retry_delay * 1.5, 30.0)
+            except Exception as e:
+                print(f"[Orchestrator] Unexpected loop error: {e}")
+                await asyncio.sleep(2.0)
 
     async def listen_commands(self, ws):
+        """
+        Monitors incoming dashboard controls (START, STOP, adjust bet/speed).
+        """
         try:
             async for message in ws:
                 data = json.loads(message)
@@ -66,46 +87,48 @@ class AutomationOrchestrator:
                     action = data.get("action")
                     if action == "START":
                         self.is_running = True
-                        print("Bot training started.")
+                        print("[Orchestrator] Training command: START")
                     elif action == "STOP":
                         self.is_running = False
-                        print("Bot training paused.")
+                        print("[Orchestrator] Training command: STOP")
                     elif action == "SET_SPEED":
                         self.delay_speed = float(data.get("value", 1.0))
-                        print(f"Speed delay adjusted to: {self.delay_speed}s")
+                        print(f"[Orchestrator] Speed delay set to {self.delay_speed}s")
                     elif action == "SET_BET":
                         self.bet_amount = float(data.get("value", 1.0))
                         self.env.stake = self.bet_amount
-                        print(f"Bet amount adjusted to: {self.bet_amount}")
+                        print(f"[Orchestrator] Bet amount adjusted to {self.bet_amount} USD")
         except websockets.exceptions.ConnectionClosed:
             pass
 
     async def agent_loop(self, ws):
-        obs, info = await asyncio.to_thread(self.env.reset)
+        """
+        Continuous Reinforcement Learning training loop.
+        """
+        # Retrieve initial reset state asynchronously
+        obs, info = await self.env.reset()
         
         while True:
             if not self.is_running:
-                # Idle wait when paused
                 await asyncio.sleep(0.5)
                 continue
                 
             self.iteration += 1
             
-            # Select target using current DQN policy
+            # Predict action from model policy
             action = self.agent.act(obs, self.epsilon)
             
-            # Execute target click in game (runs inside thread to protect async loops)
-            next_obs, reward, terminated, truncated, info = await asyncio.to_thread(
-                self.env.step, action
-            )
+            # Execute shooting action in browser asynchronously
+            next_obs, reward, terminated, truncated, info = await self.env.step(action)
             
-            # Log experience transition details
+            # Save experience trajectory tuple
             self.agent.buffer.push(obs, action, reward, next_obs, terminated)
             
-            # Optimize Neural Network parameters (SGD step)
+            # Run neural net optimization (backprop)
             loss = 0.0
             if len(self.agent.buffer) > self.agent.batch_size:
-                loss = await asyncio.to_thread(self.agent.learn)
+                # DQNAgent.learn is fast enough to execute inline
+                loss = self.agent.learn()
                 
             # Log outcomes
             outcome = info.get("outcome", "LOSS")
@@ -119,10 +142,10 @@ class AutomationOrchestrator:
             total_games = max(self.wins + self.losses, 1)
             win_rate = self.wins / total_games
             
-            # Extract Q-values strategy representation
+            # Get latest neural net Q-values
             q_values = self.agent.get_q_values(obs).tolist()
             
-            # Compile telemetry payload
+            # Package live telemetry payload
             telemetry_data = {
                 "type": "telemetry",
                 "payload": {
@@ -139,43 +162,42 @@ class AutomationOrchestrator:
                 }
             }
             
-            # Send telemetry to socket server
+            # Forward telemetry to WebSocket gateway
             try:
                 await ws.send(json.dumps(telemetry_data))
             except Exception:
                 pass
                 
-            # Periodically stream screen updates (every 5 steps)
+            # Stream screenshot frames every 5 steps
             if self.iteration % 5 == 0:
-                screenshot_b64 = await asyncio.to_thread(self.controller.capture_screenshot)
+                screenshot_b64 = await self.controller.capture_screenshot()
                 if screenshot_b64:
-                    screenshot_data = {
-                        "type": "screenshot",
-                        "payload": {
-                            "base64": screenshot_b64
-                        }
-                    }
                     try:
-                        await ws.send(json.dumps(screenshot_data))
+                        await ws.send(json.dumps({
+                            "type": "screenshot",
+                            "payload": {
+                                "base64": screenshot_b64
+                            }
+                        }))
                     except Exception:
                         pass
             
-            # Reset environment on terminal game state
+            # Trigger reset if round finished
             if terminated:
-                obs, info = await asyncio.to_thread(self.env.reset)
+                obs, info = await self.env.reset()
             else:
                 obs = next_obs
                 
-            # Decaying Epsilon
+            # Epsilon decay
             if self.epsilon > self.epsilon_min:
                 self.epsilon *= self.epsilon_decay
                 
-            # Periodic model parameter saving (every 5000 runs)
+            # Checkpoint model parameters every 5000 rounds
             if self.iteration % 5000 == 0:
                 os.makedirs("checkpoints", exist_ok=True)
                 self.agent.save(f"checkpoints/dqn_penalty_{self.iteration}.pth")
                 
-            # Configurable rate limiter
+            # Limiter delay
             await asyncio.sleep(self.delay_speed)
 
 if __name__ == "__main__":
@@ -183,4 +205,6 @@ if __name__ == "__main__":
     try:
         asyncio.run(orchestrator.connect_and_loop())
     except KeyboardInterrupt:
-        print("Bot automation stopped.")
+        print("[Orchestrator] Stopped by user command.")
+    except Exception as e:
+        print(f"[Orchestrator] Critical run failure: {e}")

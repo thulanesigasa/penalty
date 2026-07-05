@@ -1,15 +1,15 @@
 "use client";
 
 import React from "react";
-import { Monitor, HelpCircle, KeyRound, Globe, RefreshCw } from "lucide-react";
+import { Monitor, Globe, RefreshCw } from "lucide-react";
 
 interface StateStreamProps {
-  screenshot: string | null;
+  latestScreenshot: string | null;
 }
 
-export function StateStream({ screenshot }: StateStreamProps) {
+export function StateStream({ latestScreenshot }: StateStreamProps) {
   return (
-    <div className="glass-panel rounded-2xl p-6 flex flex-col gap-5 h-full">
+    <div className="glass-panel rounded-2xl p-6 flex flex-col gap-5 h-full border border-white/5 bg-black/40">
       <div className="flex items-center justify-between border-b border-white/5 pb-4">
         <div className="flex items-center gap-3">
           <Monitor className="text-primary-electric w-5 h-5" />
@@ -18,10 +18,10 @@ export function StateStream({ screenshot }: StateStreamProps) {
       </div>
 
       <div className="flex-1 flex items-center justify-center bg-black/40 rounded-xl border border-white/5 overflow-hidden min-h-[300px] relative">
-        {screenshot ? (
+        {latestScreenshot ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
-            src={screenshot}
+            src={latestScreenshot}
             alt="Live Automation Session Stream"
             className="w-full h-full object-cover object-center max-h-[450px]"
           />

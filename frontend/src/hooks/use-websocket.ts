@@ -13,56 +13,92 @@ export interface TelemetryPayload {
   grid_state: number[];
 }
 
-export type ConnectionStatus = "CONNECTING" | "CONNECTED" | "DISCONNECTED";
+export interface SystemStats {
+  totalIterations: number;
+  winRate: number;
+  totalProfit: number;
+  currentEpsilon: number;
+  loss: number;
+}
 
 export function useWebSocket(url: string) {
-  const [status, setStatus] = useState<ConnectionStatus>("DISCONNECTED");
-  const [telemetry, setTelemetry] = useState<TelemetryPayload | null>(null);
-  const [screenshot, setScreenshot] = useState<string | null>(null);
+  const [isConnected, setIsConnected] = useState<boolean>(false);
+  const [latestTelemetry, setLatestTelemetry] = useState<TelemetryPayload | null>(null);
+  const [latestScreenshot, setLatestScreenshot] = useState<string | null>(null);
+  const [systemStats, setSystemStats] = useState<SystemStats>({
+    totalIterations: 0,
+    winRate: 0.0,
+    totalProfit: 0.0,
+    currentEpsilon: 100.0,
+    loss: 0.0,
+  });
   const [history, setHistory] = useState<TelemetryPayload[]>([]);
+  
   const wsRef = useRef<WebSocket | null>(null);
+  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const connect = useCallback(() => {
+    // Prevent duplicated connections if active
     if (wsRef.current && wsRef.current.readyState !== WebSocket.CLOSED) return;
 
-    setStatus("CONNECTING");
+    setIsConnected(false);
     const ws = new WebSocket(url);
     wsRef.current = ws;
 
     ws.onopen = () => {
-      setStatus("CONNECTED");
-      console.log("WebSocket connected to dashboard endpoint");
+      setIsConnected(true);
+      console.log("[WS Hook] WebSocket connection opened successfully.");
     };
 
     ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data);
+        
         if (msg.type === "telemetry") {
           const payload = msg.payload as TelemetryPayload;
-          setTelemetry(payload);
+          setLatestTelemetry(payload);
+          
+          // Accumulate systemStats telemetry values
+          setSystemStats((prev) => {
+            // payout - stake (bet) is the profit for this step.
+            // telemetry.profit_loss contains the exact reward value. We can accumulate profit.
+            const reward = payload.profit_loss;
+            return {
+              totalIterations: payload.iteration,
+              winRate: payload.win_rate,
+              // If outcome is WIN, add reward. If LOSS, subtract stake. 
+              // To match telemetry profit tracking, we accumulate reward values directly:
+              totalProfit: prev.totalProfit + reward,
+              currentEpsilon: payload.epsilon,
+              loss: payload.loss,
+            };
+          });
+
           setHistory((prev) => {
-            // Cap history length at 50 elements for active dashboard performance
             const nextHistory = [...prev, payload];
             if (nextHistory.length > 50) {
               nextHistory.shift();
             }
             return nextHistory;
           });
-        } else if (msg.type === "screenshot") {
-          setScreenshot(msg.payload.base64);
+        } 
+        
+        else if (msg.type === "screenshot") {
+          setLatestScreenshot(msg.payload.base64);
         }
       } catch (err) {
-        console.error("Failed to parse WebSocket message:", err);
+        console.error("[WS Hook] Error processing WebSocket message:", err);
       }
     };
 
     ws.onclose = () => {
-      setStatus("DISCONNECTED");
-      console.log("WebSocket disconnected. Reconnecting in 3s...");
-      setTimeout(connect, 3000);
+      setIsConnected(false);
+      console.log("[WS Hook] WebSocket connection closed. Retrying in 3s...");
+      reconnectTimeoutRef.current = setTimeout(connect, 3000);
     };
 
-    ws.onerror = () => {
+    ws.onerror = (err) => {
+      console.error("[WS Hook] WebSocket error encountered:", err);
       ws.close();
     };
   }, [url]);
@@ -70,37 +106,32 @@ export function useWebSocket(url: string) {
   useEffect(() => {
     connect();
     return () => {
-      if (wsRef.current) {
-        wsRef.current.close();
-      }
+      if (wsRef.current) wsRef.current.close();
+      if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
     };
   }, [connect]);
 
-  const sendCommand = useCallback((action: string, value?: any) => {
+  // Command Emitter
+  const sendCommand = useCallback((action: "START" | "STOP" | "SET_SPEED" | "SET_BET", value?: any) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(
-        JSON.stringify({
-          type: "command",
-          action,
-          ...(value !== undefined ? { value } : {}),
-        })
-      );
+      const command = {
+        type: "command",
+        action,
+        ...(value !== undefined ? { value } : {}),
+      };
+      wsRef.current.send(JSON.stringify(command));
+      console.log("[WS Hook] Emitted command command:", command);
+    } else {
+      console.warn("[WS Hook] WebSocket not open. Could not send command:", action);
     }
   }, []);
 
-  const startAgent = useCallback(() => sendCommand("START"), [sendCommand]);
-  const stopAgent = useCallback(() => sendCommand("STOP"), [sendCommand]);
-  const setSpeed = useCallback((val: number) => sendCommand("SET_SPEED", val), [sendCommand]);
-  const setBet = useCallback((val: number) => sendCommand("SET_BET", val), [sendCommand]);
-
   return {
-    status,
-    telemetry,
-    screenshot,
+    isConnected,
+    latestTelemetry,
+    latestScreenshot,
+    systemStats,
     history,
-    startAgent,
-    stopAgent,
-    setSpeed,
-    setBet,
+    sendCommand,
   };
 }

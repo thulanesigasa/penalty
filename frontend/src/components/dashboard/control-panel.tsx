@@ -2,32 +2,25 @@
 
 import React, { useState } from "react";
 import { Play, Pause, Activity, Sliders, Circle } from "lucide-react";
-import { ConnectionStatus } from "@/hooks/use-websocket";
 
 interface ControlPanelProps {
-  status: ConnectionStatus;
-  startAgent: () => void;
-  stopAgent: () => void;
-  setSpeed: (val: number) => void;
-  setBet: (val: number) => void;
+  isConnected: boolean;
+  sendCommand: (action: "START" | "STOP" | "SET_SPEED" | "SET_BET", value?: any) => void;
 }
 
 export function ControlPanel({
-  status,
-  startAgent,
-  stopAgent,
-  setSpeed,
-  setBet,
+  isConnected,
+  sendCommand,
 }: ControlPanelProps) {
-  const [isRunning, setIsRunning] = useState(false);
-  const [speedVal, setSpeedVal] = useState(1.0);
-  const [betVal, setBetVal] = useState(1.0);
+  const [isRunning, setIsRunning] = useState<boolean>(false);
+  const [speedVal, setSpeedVal] = useState<number>(1.0);
+  const [betVal, setBetVal] = useState<number>(1.0);
 
   const handleStartStop = () => {
     if (isRunning) {
-      stopAgent();
+      sendCommand("STOP");
     } else {
-      startAgent();
+      sendCommand("START");
     }
     setIsRunning(!isRunning);
   };
@@ -35,23 +28,17 @@ export function ControlPanel({
   const handleSpeedChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = parseFloat(e.target.value);
     setSpeedVal(val);
-    setSpeed(val);
+    sendCommand("SET_SPEED", val);
   };
 
   const handleBetChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = parseFloat(e.target.value);
     setBetVal(val);
-    setBet(val);
-  };
-
-  const statusColorMap = {
-    CONNECTED: "text-success-emerald bg-success-emerald/10 border-success-emerald/20",
-    CONNECTING: "text-warning-amber bg-warning-amber/10 border-warning-amber/20 animate-pulse",
-    DISCONNECTED: "text-danger-rose bg-danger-rose/10 border-danger-rose/20",
+    sendCommand("SET_BET", val);
   };
 
   return (
-    <div className="glass-panel rounded-2xl p-6 flex flex-col gap-6">
+    <div className="glass-panel rounded-2xl p-6 flex flex-col gap-6 border border-white/5 bg-black/40">
       <div className="flex items-center justify-between border-b border-white/5 pb-4">
         <div className="flex items-center gap-3">
           <Sliders className="text-primary-electric w-5 h-5" />
@@ -61,11 +48,13 @@ export function ControlPanel({
         {/* Status Pill */}
         <div
           className={`px-3 py-1 text-xs font-semibold rounded-full border flex items-center gap-1.5 ${
-            statusColorMap[status]
+            isConnected
+              ? "text-success-emerald bg-success-emerald/10 border-success-emerald/20"
+              : "text-danger-rose bg-danger-rose/10 border-danger-rose/20 animate-pulse"
           }`}
         >
           <Circle className="w-2.5 h-2.5 fill-current" />
-          {status}
+          {isConnected ? "CONNECTED" : "DISCONNECTED"}
         </div>
       </div>
 
@@ -73,7 +62,7 @@ export function ControlPanel({
         {/* Play/Pause Button */}
         <button
           onClick={handleStartStop}
-          disabled={status !== "CONNECTED"}
+          disabled={!isConnected}
           className={`w-full py-3.5 px-6 rounded-xl font-bold flex items-center justify-center gap-2 transition-all cursor-pointer select-none active:scale-98 ${
             isRunning
               ? "bg-danger-rose hover:bg-danger-rose/90 text-white shadow-[0_0_20px_rgba(244,63,94,0.3)]"
@@ -104,7 +93,7 @@ export function ControlPanel({
             step="0.1"
             value={speedVal}
             onChange={handleSpeedChange}
-            disabled={status !== "CONNECTED"}
+            disabled={!isConnected}
             className="w-full h-1.5 rounded-lg appearance-none cursor-pointer bg-white/10 accent-primary-electric"
           />
         </div>
@@ -122,7 +111,7 @@ export function ControlPanel({
             step="1.0"
             value={betVal}
             onChange={handleBetChange}
-            disabled={status !== "CONNECTED"}
+            disabled={!isConnected}
             className="w-full h-1.5 rounded-lg appearance-none cursor-pointer bg-white/10 accent-primary-electric"
           />
         </div>

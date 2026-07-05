@@ -16,34 +16,33 @@ export function PenaltyGrid({
   outcome,
   qValues,
 }: PenaltyGridProps) {
-  // Setup 12 default grids if null
+  // Use blank/empty fallbacks if no socket payload is active yet
   const activeGrid = gridState || Array(12).fill(0);
   const activeQ = qValues || Array(12).fill(0.0);
 
-  // Normalize Q-values for the heatmap overlay (0 to 1 scale)
+  // Normalize Q-values to generate proportional HSL/rgba strategical heatmaps
   const minQ = Math.min(...activeQ);
   const maxQ = Math.max(...activeQ);
   const qRange = maxQ - minQ || 1.0;
 
   const getHeatmapColor = (qVal: number) => {
-    // High Q-value -> purple glow overlay
+    // Highly preferred targets will display a glowing purple background overlay
     const normalized = (qVal - minQ) / qRange;
     return `rgba(99, 102, 241, ${normalized * 0.25})`;
   };
 
   return (
-    <div className="glass-panel rounded-2xl p-6 flex flex-col gap-5 flex-1">
+    <div className="glass-panel rounded-2xl p-6 flex flex-col gap-5 flex-1 border border-white/5 bg-black/40">
       <div className="flex items-center gap-3 border-b border-white/5 pb-4">
         <Target className="text-primary-electric w-5 h-5" />
         <div>
           <h2 className="text-lg font-semibold tracking-wide">Penalty Shooting Grid</h2>
-          <p className="text-xs text-gray-400">Heatmap shows AI Q-value selection strategy (purple = high priority)</p>
+          <p className="text-xs text-gray-400">Heatmap highlights AI Q-value strategy (higher opacity = preferred spot)</p>
         </div>
       </div>
 
       <div className="grid grid-cols-4 gap-4 aspect-[4/3] w-full max-w-[600px] mx-auto bg-black/30 rounded-xl p-4 border border-white/5 relative">
-        
-        {/* Goal Post lines styling to look like football goal */}
+        {/* Goal line aesthetic elements */}
         <div className="absolute top-0 left-4 right-4 h-2 border-t-2 border-x-2 border-white/20 rounded-t-lg"></div>
 
         {Array(12)
@@ -54,7 +53,6 @@ export function PenaltyGrid({
             const qVal = activeQ[index];
             const bgHeat = getHeatmapColor(qVal);
             
-            // Determine border and active states
             let cellStyle = "border-white/5 bg-white/2 hover:bg-white/5";
             let glowLayer = null;
 
@@ -80,12 +78,12 @@ export function PenaltyGrid({
               >
                 {glowLayer}
                 
-                {/* Spot Index Number */}
+                {/* Cell grid indices */}
                 <span className="absolute top-1.5 left-2 text-[10px] text-gray-500 font-bold">
                   #{index}
                 </span>
 
-                {/* Main Node Graphic */}
+                {/* Center target circle indicator */}
                 <div className="w-8 h-8 rounded-full border border-white/10 flex items-center justify-center bg-black/40 group-hover:scale-110 transition-transform shadow-inner">
                   {isShot ? (
                     <span
@@ -102,7 +100,7 @@ export function PenaltyGrid({
                   )}
                 </div>
 
-                {/* Q-Value display */}
+                {/* Policy Weight value overlays */}
                 {!isHit && (
                   <span className="text-[10px] text-gray-400 mt-1 font-mono font-medium">
                     {qVal >= 0 ? "+" : ""}
@@ -111,7 +109,7 @@ export function PenaltyGrid({
                 )}
                 {isHit && (
                   <span className="text-[9px] text-gray-500 mt-1 uppercase tracking-tight font-semibold">
-                    Cleared
+                    Shot
                   </span>
                 )}
               </div>

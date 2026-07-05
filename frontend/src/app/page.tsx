@@ -20,16 +20,14 @@ import {
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000/ws/dashboard";
 
 export default function DashboardPage() {
-  const [isMounted, setIsMounted] = useState(false);
+  const [isMounted, setIsMounted] = useState<boolean>(false);
   const {
-    status,
-    telemetry,
-    screenshot,
+    isConnected,
+    latestTelemetry,
+    latestScreenshot,
+    systemStats,
     history,
-    startAgent,
-    stopAgent,
-    setSpeed,
-    setBet,
+    sendCommand,
   } = useWebSocket(WS_URL);
 
   useEffect(() => {
@@ -54,44 +52,43 @@ export default function DashboardPage() {
           </div>
         </div>
         
-        {/* API Connection Indicator */}
+        {/* Connection status check */}
         <div className="flex items-center gap-2.5 px-4 py-2 rounded-xl bg-white/5 border border-white/5">
-          <ShieldCheck className="w-4 h-4 text-success-emerald" />
-          <span className="text-xs font-semibold text-gray-300">FastAPI Bridge API Active</span>
+          <ShieldCheck className={`w-4 h-4 ${isConnected ? "text-success-emerald" : "text-danger-rose"}`} />
+          <span className="text-xs font-semibold text-gray-300">
+            {isConnected ? "FastAPI Bridge Connected" : "Awaiting API Connection"}
+          </span>
         </div>
       </header>
 
-      {/* Metrics Row */}
-      <MetricsGrid telemetry={telemetry} />
+      {/* Metrics Row Grid */}
+      <MetricsGrid systemStats={systemStats} />
 
-      {/* Main Grid Section */}
+      {/* Primary Panels Layout */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         
-        {/* Controls Column */}
+        {/* Controls Columns */}
         <div className="flex flex-col gap-6 lg:col-span-1">
           <ControlPanel
-            status={status}
-            startAgent={startAgent}
-            stopAgent={stopAgent}
-            setSpeed={setSpeed}
-            setBet={setBet}
+            isConnected={isConnected}
+            sendCommand={sendCommand}
           />
-          <StateStream screenshot={screenshot} />
+          <StateStream latestScreenshot={latestScreenshot} />
         </div>
 
-        {/* Penalty Visualizer and Live Chart Column */}
+        {/* Shootout Visualizer and Chart Columns */}
         <div className="flex flex-col gap-6 lg:col-span-2">
           
-          {/* Penalty Shooting Grid */}
+          {/* 12 Target Penalty Grid */}
           <PenaltyGrid
-            gridState={telemetry?.grid_state ?? null}
-            targetShot={telemetry?.target_shot ?? null}
-            outcome={telemetry?.outcome ?? null}
-            qValues={telemetry?.q_values ?? null}
+            gridState={latestTelemetry?.grid_state ?? null}
+            targetShot={latestTelemetry?.target_shot ?? null}
+            outcome={latestTelemetry?.outcome ?? null}
+            qValues={latestTelemetry?.q_values ?? null}
           />
 
-          {/* Performance Chart Card */}
-          <div className="glass-panel rounded-2xl p-6 flex flex-col gap-5">
+          {/* Performance Area/Line Chart */}
+          <div className="glass-panel rounded-2xl p-6 flex flex-col gap-5 border border-white/5 bg-black/40">
             <div className="flex items-center justify-between border-b border-white/5 pb-4">
               <div className="flex items-center gap-3">
                 <TrendingUp className="text-primary-electric w-5 h-5" />

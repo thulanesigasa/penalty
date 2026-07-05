@@ -1,208 +1,246 @@
 import os
-import time
+import asyncio
 import base64
-from playwright.sync_api import sync_playwright
-from typing import Tuple, Dict, Any, List
+from playwright.async_api import async_playwright, Page, Browser, BrowserContext
+from typing import Tuple, Dict, Any, Optional
 
 class BrowserController:
     """
-    Playwright-based controller that attaches to a running Chrome instance
-    via the remote debugging port, extracts game states, and interacts with the GUI.
+    Asynchronous Playwright-based controller that launches a persistent Chrome session
+    or attaches to an active instance via CDP. Includes user authentication pause loops,
+    DOM state extraction, coordinates clicks, and screenshot capturing.
     """
     def __init__(self, debug_ws_url: str = "http://localhost:9222"):
         self.debug_ws_url = debug_ws_url
         self.playwright = None
-        self.browser = None
-        self.context = None
-        self.page = None
-        self.grid_selector = ".penalty-grid-container, #penalty-game-canvas, .game-board" # fallback selectors
-        self.target_selector_template = ".penalty-target[data-id='{}'], .spot-{}" # template selectors
-        self.connect()
+        self.browser: Optional[Browser] = None
+        self.context: Optional[BrowserContext] = None
+        self.page: Optional[Page] = None
+        self.grid_selector = ".penalty-grid-container, #penalty-game-canvas, .game-board"
+        self.bet_button_selector = ".bet-button, button:has-text('Bet'), button:has-text('Play')"
 
-    def connect(self):
+    async def connect(self, headless: bool = False):
+        """
+        Launches a persistent browser session or attaches to Chrome.
+        """
         try:
-            self.playwright = sync_playwright().start()
-            # Connect to existing Chrome session using remote debugging
-            self.browser = self.playwright.chromium.connect_over_cdp(self.debug_ws_url)
-            self.context = self.browser.contexts[0]
+            self.playwright = await async_playwright().start()
             
-            # Find the active page/tab playing the penalty game
-            pages = self.context.pages
-            if not pages:
-                # If no pages exist, create one
-                self.page = self.context.new_page()
-            else:
-                # Look for a page containing 'penalty' or default to the active tab
-                for p in pages:
-                    if "penalty" in p.url.lower() or "game" in p.url.lower():
-                        self.page = p
-                        break
-                if not self.page:
-                    self.page = pages[0]
-            
-            # Set default timeout
+            # Choose between CDP attachment and creating a new persistent instance
+            if self.debug_ws_url and not headless:
+                print(f"[Controller] Attaching to Chrome CDP session at {self.debug_ws_url}...")
+                try:
+                    self.browser = await self.playwright.chromium.connect_over_cdp(self.debug_ws_url)
+                    self.context = self.browser.contexts[0]
+                    pages = self.context.pages
+                    if pages:
+                        self.page = pages[0]
+                    else:
+                        self.page = await self.context.new_page()
+                    print(f"[Controller] Attached to browser page: {self.page.url}")
+                except Exception as e:
+                    print(f"[Controller] Remote CDP link failed: {e}. Launching local browser instead.")
+                    self.browser = None
+
+            if not self.browser:
+                print("[Controller] Launching persistent local browser instance...")
+                user_data_dir = os.path.join(os.getcwd(), "chrome-profile")
+                self.context = await self.playwright.chromium.launch_persistent_context(
+                    user_data_dir,
+                    headless=headless,
+                    args=["--no-sandbox", "--disable-setuid-sandbox"]
+                )
+                self.page = await self.context.new_page()
+                print("[Controller] Local persistent browser context created.")
+
             self.page.set_default_timeout(10000)
-            print(f"Successfully attached to page: {self.page.url}")
+            
         except Exception as e:
-            print(f"Error connecting to Chrome debugging instance: {e}")
-            print("Running in simulated browser mode. Please ensure Chrome is running with remote-debugging-port=9222")
+            print(f"[Controller] Critical browser startup error: {e}")
             self.page = None
 
-    def get_state(self) -> Dict[str, Any]:
+    async def pause_for_login(self, target_url: str = "penalty"):
         """
-        Reads active game grid multipliers and state from the DOM.
+        Halts automation loop execution to allow the user to manually log in.
+        Monitors page URL or a success selector until verified, or awaits keyboard entry.
+        """
+        if not self.page:
+            print("[Controller Mock] Mock pause_for_login completed.")
+            return
+
+        print("\n" + "="*60)
+        print("ACTION REQUIRED: MANUAL LOGIN HANDOFF ACTIVE")
+        print("Please log into your demo account in the opened Chrome browser.")
+        print(f"Verify you are on the game page containing '{target_url}' in the URL.")
+        print("="*60 + "\n")
+
+        # Yield execution control by listening to page URL changes or waiting for manual trigger
+        # We loop and poll until the URL updates to match target_url
+        max_attempts = 120  # 2 minute timeout
+        for i in range(max_attempts):
+            current_url = self.page.url
+            if target_url in current_url.lower():
+                print(f"[Controller] Detected target URL: {current_url}. Resuming bot control.")
+                return
+            await asyncio.sleep(1.0)
+            if i % 15 == 0:
+                print(f"[Controller] Still waiting for login... ({120 - i}s remaining)")
+
+        print("[Controller] Warning: Login wait timed out. Resuming loop.")
+
+    async def get_state(self) -> Dict[str, Any]:
+        """
+        Asynchronously parses Penalty game state: active multiplier, grid hits, and bet button status.
         """
         grid = [0] * 12
         multiplier = 1.0
-        
+        bet_active = False
+
         if not self.page:
-            return {"grid": grid, "multiplier": multiplier}
-            
+            # Mock state fallback
+            return {"grid": grid, "multiplier": multiplier, "bet_active": True}
+
         try:
-            # Locate all selected targets to populate the active state grid
-            # In a real penalty game, we check the DOM for elements marked as 'hit', 'score', or 'miss'
-            hit_spots = self.page.locator(".penalty-target.hit, .spot.scored, .spot.missed").all()
+            # 1. Check if the Bet/Start button is visible and active (ready for new round input)
+            bet_btn = self.page.locator(self.bet_button_selector).first
+            if await bet_btn.is_visible():
+                bet_active = await bet_btn.is_enabled()
+
+            # 2. Extract cleared spots from DOM
+            hit_spots = await self.page.locator(".penalty-target.hit, .spot.scored, .spot.missed").all()
             for spot in hit_spots:
-                spot_id = spot.get_attribute("data-id") or spot.get_attribute("id")
+                spot_id = await spot.get_attribute("data-id") or await spot.get_attribute("id")
                 if spot_id and spot_id.isdigit():
                     idx = int(spot_id)
                     if 0 <= idx < 12:
                         grid[idx] = 1
-            
-            # Extract multiplier text from DOM
+
+            # 3. Read multiplier values
             mult_el = self.page.locator(".current-multiplier, .payout-mult, .game-info .value").first
-            if mult_el.is_visible():
-                mult_txt = mult_el.text_content() or "1.0"
-                # Strip symbols like 'x' or whitespace
+            if await mult_el.is_visible():
+                mult_txt = await mult_el.text_content() or "1.0"
                 mult_txt = mult_txt.replace("x", "").replace("X", "").strip()
                 try:
                     multiplier = float(mult_txt)
                 except ValueError:
                     pass
-        except Exception as e:
-            print(f"Error extracting game state: {e}")
-            
-        return {"grid": grid, "multiplier": multiplier}
 
-    def click_target(self, action: int) -> Tuple[bool, float, str]:
+        except Exception as e:
+            print(f"[Controller] Error extracting state values: {e}")
+
+        return {"grid": grid, "multiplier": multiplier, "bet_active": bet_active}
+
+    async def click_target(self, action: int) -> Tuple[bool, float, str]:
         """
-        Executes click action on specified target (0-11) in 3x4 grid.
-        Returns:
-            success (bool): Did the shot score?
-            payout (float): The current round payout.
-            outcome (str): 'WIN', 'LOSS', or 'ERROR'.
+        Sends click action to selected target cell (0-11).
         """
         if not self.page:
-            # Browser mock fallback
             return (True, 1.15, "WIN")
-            
+
         try:
-            # 1. Attempt clicking by matching dynamic selectors
             clicked = False
-            for selector_pattern in [".penalty-target[data-id='{}']", ".spot-{}", "#spot-{}"]:
-                selector = selector_pattern.format(action)
+            # Try selector matching
+            for pattern in [".penalty-target[data-id='{}']", ".spot-{}", "#spot-{}"]:
+                selector = pattern.format(action)
                 target = self.page.locator(selector)
-                if target.is_visible() and target.is_enabled():
-                    target.click()
+                if await target.is_visible() and await target.is_enabled():
+                    await target.click()
                     clicked = True
                     break
-            
-            # 2. Fallback: coordinate-based grid click if grid selector is found
+
+            # Coordinate click fallback
             if not clicked:
-                grid_container = self.page.locator(self.grid_selector).first
-                if grid_container.is_visible():
-                    box = grid_container.bounding_box()
+                grid_el = self.page.locator(self.grid_selector).first
+                if await grid_el.is_visible():
+                    box = await grid_el.bounding_box()
                     if box:
-                        # Compute 3x4 grid center offsets
                         col = action % 4
                         row = action // 4
-                        
                         cell_w = box["width"] / 4
                         cell_h = box["height"] / 3
-                        
                         click_x = box["x"] + (col * cell_w) + (cell_w / 2)
                         click_y = box["y"] + (row * cell_h) + (cell_h / 2)
                         
-                        self.page.mouse.click(click_x, click_y)
+                        await self.page.mouse.click(click_x, click_y)
                         clicked = True
-            
+
             if not clicked:
-                # Last resort: click general body coordinates or return error
-                print(f"Could not locate element for target {action}, simulating generic click")
+                print(f"[Controller] Target {action} selector could not be clicked.")
                 return (False, 0.0, "ERROR")
-                
-            # Wait for animation to resolve (typically ~1.5 - 2.0s)
-            time.sleep(1.8)
-            
-            # Determine outcome (Scored/Saved)
-            # We look for text overlays indicating "Goal" or visual cues
-            status_text = self.page.locator(".game-status-text, .result-overlay").first
-            if status_text.is_visible():
-                txt = (status_text.text_content() or "").lower()
+
+            # Wait for browser shot animation
+            await asyncio.sleep(1.8)
+
+            # Evaluate outcome
+            status_el = self.page.locator(".game-status-text, .result-overlay").first
+            if await status_el.is_visible():
+                txt = (await status_el.text_content() or "").lower()
                 if "goal" in txt or "win" in txt or "score" in txt:
-                    return (True, self.get_state()["multiplier"], "WIN")
+                    state = await self.get_state()
+                    return (True, state["multiplier"], "WIN")
                 elif "save" in txt or "miss" in txt or "lose" in txt:
                     return (False, 0.0, "LOSS")
-            
-            # Fallback check based on cashout/collect button state
+
+            # Validate cashout state
             cashout_btn = self.page.locator(".cashout-button, .collect-btn").first
-            if cashout_btn.is_visible() and cashout_btn.is_enabled():
-                return (True, self.get_state()["multiplier"], "WIN")
+            if await cashout_btn.is_visible() and await cashout_btn.is_enabled():
+                state = await self.get_state()
+                return (True, state["multiplier"], "WIN")
             else:
                 return (False, 0.0, "LOSS")
-                
+
         except Exception as e:
-            print(f"Action execution error on target {action}: {e}")
+            print(f"[Controller] Click execution error on target {action}: {e}")
             return (False, 0.0, "ERROR")
 
-    def reset_game(self) -> bool:
+    async def reset_game(self) -> bool:
         """
-        Clicks "New Round" or "Cashout" button to reset Penalty board state.
+        Resets the penalty board state for a new round.
         """
         if not self.page:
             return True
-            
         try:
-            # Try cashout/collect button first
+            # Try to cashout / collect earnings
             collect_btn = self.page.locator(".cashout-button, .collect-btn, button:has-text('Collect'), button:has-text('Cash Out')").first
-            if collect_btn.is_visible() and collect_btn.is_enabled():
-                collect_btn.click()
-                time.sleep(1.0)
+            if await collect_btn.is_visible() and await collect_btn.is_enabled():
+                await collect_btn.click()
+                await asyncio.sleep(1.0)
                 return True
-                
-            # Try new game/reset button
+
+            # Try to click restart/play
             reset_btn = self.page.locator(".new-game-btn, button:has-text('New Game'), button:has-text('Play')").first
-            if reset_btn.is_visible() and reset_btn.is_enabled():
-                reset_btn.click()
-                time.sleep(1.0)
+            if await reset_btn.is_visible() and await reset_btn.is_enabled():
+                await reset_btn.click()
+                await asyncio.sleep(1.0)
                 return True
         except Exception as e:
-            print(f"Error resetting game board: {e}")
-            
+            print(f"[Controller] Error executing board reset: {e}")
         return False
 
-    def capture_screenshot(self) -> str:
+    async def capture_screenshot(self) -> str:
         """
-        Captures a screenshot of the active browser screen and encodes it as Base64.
+        Captures screenshot and returns Base64 string for dashboard streams.
         """
         if not self.page:
-            # Return dummy base64 pixel image
             return "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
-            
         try:
-            # Capture viewport screenshot (or locate game-board specifically to crop)
-            screenshot_bytes = self.page.screenshot(type="jpeg", quality=60)
+            screenshot_bytes = await self.page.screenshot(type="jpeg", quality=50)
             encoded = base64.b64encode(screenshot_bytes).decode("utf-8")
             return f"data:image/jpeg;base64,{encoded}"
         except Exception as e:
-            print(f"Error capturing screenshot: {e}")
+            print(f"[Controller] Screenshot capture failed: {e}")
             return ""
 
-    def disconnect(self):
+    async def disconnect(self):
+        """
+        Safely closes context resources.
+        """
         try:
+            if self.context:
+                await self.context.close()
             if self.browser:
-                self.browser.close()
+                await self.browser.close()
             if self.playwright:
-                self.playwright.stop()
+                await self.playwright.stop()
         except Exception:
             pass

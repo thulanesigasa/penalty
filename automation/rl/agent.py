@@ -8,7 +8,7 @@ from typing import Tuple
 
 class QNetwork(nn.Module):
     """
-    Multi-layer Perceptron (MLP) mapping 13 input features (12 target cells + multiplier)
+    Multi-layer Perceptron (MLP) mapping 13 input features (12 target cells + current multiplier)
     to 12 output values (predicted Q-values for shooting spots 0-11).
     """
     def __init__(self, state_dim: int = 13, action_dim: int = 12):
@@ -49,8 +49,8 @@ class ReplayBuffer:
 
 class DQNAgent:
     """
-    Deep Q-Network Agent coordinating epsilon-greedy exploration, training updates,
-    and checkpoint saving.
+    Deep Q-Network Agent coordinating epsilon-greedy exploration, target synchronization,
+    backpropagation loss optimization, and model checkpoints saving/loading.
     """
     def __init__(
         self,
@@ -69,32 +69,39 @@ class DQNAgent:
         self.target_update_freq = target_update_freq
         self.learn_steps = 0
         
-        # Double DQN networks
+        # Instantiate policy and target networks (Double DQN approach)
         self.q_net = QNetwork(state_dim, action_dim)
         self.target_net = QNetwork(state_dim, action_dim)
         self.target_net.load_state_dict(self.q_net.state_dict())
         
+        # Optimizer and Replay Buffer setup
         self.optimizer = optim.Adam(self.q_net.parameters(), lr=lr)
         self.buffer = ReplayBuffer(buffer_capacity)
         
-        # Automatically choose GPU or fallback to CPU
+        # Select target training device (GPU if available, else CPU fallback)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.q_net.to(self.device)
         self.target_net.to(self.device)
 
     def act(self, state: np.ndarray, epsilon: float = 0.1) -> int:
         """
-        Calculates action using epsilon-greedy strategy.
+        Calculates the best action to perform using an epsilon-greedy strategy.
+        Filters out targets that have already been clicked (i.e. state[i] == 1.0) to prevent invalid moves.
         """
-        # Epsilon-greedy selection
+        # Epsilon-greedy exploration step
         if random.random() < epsilon:
+            # Choose from active (un-clicked) targets
+            active_spots = np.where(state[:12] == 0.0)[0]
+            if len(active_spots) > 0:
+                return int(random.choice(active_spots))
             return random.randint(0, self.action_dim - 1)
         
+        # Exploitation step
         state_t = torch.FloatTensor(state).unsqueeze(0).to(self.device)
         with torch.no_grad():
             q_values = self.q_net(state_t)
-            # Find the best action that has NOT already been selected (which has grid state 0)
-            # State elements 0..11 represent grid states
+            
+            # Select action with maximum Q-value that is still active (unhit)
             active_spots = np.where(state[:12] == 0.0)[0]
             if len(active_spots) > 0:
                 q_vals_cpu = q_values.squeeze(0).cpu().numpy()
@@ -105,12 +112,13 @@ class DQNAgent:
 
     def learn(self) -> float:
         """
-        Sample replay history and perform a Single SGD update step on weights.
-        Returns training loss value.
+        Samples transitions from experience buffer, calculates Double DQN Huber loss,
+        optimizes weight gradients, and updates the target network periodically.
         """
         if len(self.buffer) < self.batch_size:
             return 0.0
             
+        # Sample mini-batch from experience buffer
         states, actions, rewards, next_states, dones = self.buffer.sample(self.batch_size)
         
         states_t = torch.FloatTensor(states).to(self.device)
@@ -119,28 +127,28 @@ class DQNAgent:
         next_states_t = torch.FloatTensor(next_states).to(self.device)
         dones_t = torch.FloatTensor(dones).unsqueeze(1).to(self.device)
         
-        # Calculate current Q-values
+        # Extract estimated Q-values of selected actions from policy network
         curr_q = self.q_net(states_t).gather(1, actions_t)
         
-        # Calculate Target Q-values (Double DQN logic)
+        # Compute target Q-values using Double DQN logic
         with torch.no_grad():
-            # Get best action from main network
+            # Get optimal action from policy network
             best_actions = self.q_net(next_states_t).argmax(dim=1, keepdim=True)
             # Evaluate this action using target network
             max_next_q = self.target_net(next_states_t).gather(1, best_actions)
             target_q = rewards_t + (1 - dones_t) * self.gamma * max_next_q
             
-        # Huber Loss
+        # Smooth L1 (Huber) loss function
         loss_fn = nn.SmoothL1Loss()
         loss = loss_fn(curr_q, target_q)
         
-        # Backprop
+        # Optimize neural network parameter weights
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
         
+        # Increment step count and sync target parameters if threshold reached
         self.learn_steps += 1
-        # Synchronize Target network parameters
         if self.learn_steps % self.target_update_freq == 0:
             self.target_net.load_state_dict(self.q_net.state_dict())
             
@@ -148,8 +156,8 @@ class DQNAgent:
 
     def get_q_values(self, state: np.ndarray) -> np.ndarray:
         """
-        Returns estimated values for all actions from state.
-        Used for dashboard overlays.
+        Helper method to extract Q-value predictions for all actions from state.
+        Used to feed visual dashboard strategy overlays.
         """
         state_t = torch.FloatTensor(state).unsqueeze(0).to(self.device)
         with torch.no_grad():
@@ -157,8 +165,14 @@ class DQNAgent:
         return q_vals
 
     def save(self, filepath: str):
+        """
+        Saves target model weights to disk.
+        """
         torch.save(self.q_net.state_dict(), filepath)
 
     def load(self, filepath: str):
+        """
+        Loads saved model weights from disk.
+        """
         self.q_net.load_state_dict(torch.load(filepath, map_location=self.device))
         self.target_net.load_state_dict(self.q_net.state_dict())
