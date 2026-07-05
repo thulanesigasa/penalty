@@ -1,97 +1,71 @@
-# Penalty Game RL Automation Bot & Dashboard
+# Penalty Shootout Reinforcement Learning Bot
 
-This repository contains a full-stack, AI-driven browser automation bot that plays a web-based Penalty shootout game, logs performance telemetry, and streams real-time training analytics to a modern Next.js dashboard.
-
----
-
-## Technical Stack Overview
-
-- **Frontend Dashboard**: Next.js (React), Tailwind CSS, Recharts for performance visualization.
-- **Backend API Bridge**: FastAPI (Python), SQLModel (SQLite database tracking), WebSockets for zero-latency messaging.
-- **Automation Controller**: Playwright (Python) connecting to Chrome via Chrome DevTools Protocol (CDP) on remote debugging port `9222`.
-- **Reinforcement Learning Brain**: PyTorch Deep Q-Network (DQN) with a custom Gymnasium environment.
+An AI-driven browser automation bot that plays a web-based Penalty shootout game, trains a Deep Q-Network (DQN) agent inside a custom Gymnasium environment, logs telemetry asynchronously to a local SQLite database, and streams real-time updates and screenshots to a responsive Next.js dashboard.
 
 ---
 
-## 1. Setup & Initialization
+## System Architecture & How We Built It
 
-### Prerequisites
-- Node.js (v18+)
-- Python (v3.10+)
-- Google Chrome browser
+The system is designed with four fully integrated, async-ready layers:
+1. **AI Brain (`automation/rl/`)**: A PyTorch-based Double DQN agent that reads the 13-dimensional game state (12 targets grid + active payout multiplier) and predicts the optimal shootout spot (0-11) using an $\epsilon$-greedy exploration strategy. It conforms to OpenAI Gymnasium conventions.
+2. **Asynchronous Database Pipeline (`backend/app/`)**: Built using FastAPI and SQLModel. It uses `sqlalchemy.ext.asyncio` and `aiosqlite` to log training rounds asynchronously, preventing file-writing blockages from locking up API requests.
+3. **Playwright Automation Client (`automation/browser/`)**: An async Playwright script that hooks into an active Chrome session, reads the game board layout, coordinates grid clicks, captures viewport screenshots, and includes a `pause_for_login` mechanism allowing manual account authentication.
+4. **Interactive Dashboard UI (`frontend/`)**: Built with Next.js and Tailwind CSS. Connects to `ws://localhost:8000/ws/dashboard` to render Recharts win-rate trends, policy Q-value heatmaps, scraper status logs, and live browser viewports.
 
----
-
-### Step A: Configure Target Browser for Handoff
-To bypass bot detection and allow manual user authentication:
-1. Close all active instances of Google Chrome.
-2. Launch Google Chrome from terminal or create a custom shortcut enabling the remote debugging port:
-   ```powershell
-   # Windows PowerShell
-   & "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --user-data-dir="C:\chrome-automation-profile"
-   ```
-3. Navigate to the target Penalty shootout game URL, sign in to your demo account, and verify the page structure is ready.
-
----
-
-### Step B: Start the Backend Gateway API
-1. Navigate to `/backend`.
-2. Create and active the virtual environment:
-   ```powershell
-   python -m venv venv
-   .\venv\Scripts\activate
-   ```
-3. Install dependencies:
-   ```powershell
-   pip install -r requirements.txt
-   ```
-4. Copy the environment file:
-   ```powershell
-   copy .env.example .env
-   ```
-5. Run the FastAPI server:
-   ```powershell
-   uvicorn app.main:app --reload
-   ```
-   *The SQLite database file (`penalty_games.db`) will be automatically created under `/data` on startup.*
+```mermaid
+graph TD
+    Dashboard[Next.js Dashboard UI] -->|WebSocket Command| FastAPI[FastAPI Gateway API]
+    FastAPI -->|WebSocket Forward| Orchestrator[Automation Orchestrator]
+    Orchestrator -->|Step/Reset Actions| Env[Asynchronous PenaltyEnv]
+    Env -->|DOM clicks / Capture| Chrome[Active Chrome CDP Session]
+    Orchestrator -->|Push Experiences| DQN[DQNAgent PyTorch]
+    Orchestrator -->|POST Telemetry| FastAPI
+    FastAPI -->|Write Async| SQLite[(SQLite aiosqlite)]
+    FastAPI -->|Broadcast Logs| Dashboard
+```
 
 ---
 
-### Step C: Launch the Next.js Web Dashboard
-1. Navigate to `/frontend`.
-2. Install npm packages:
-   ```bash
-   npm install
-   ```
-3. Launch development server:
-   ```bash
-   npm run dev
-   ```
-4. Open [http://localhost:3000](http://localhost:3000) in your browser.
+## Technical Stack
+* **Reinforcement Learning**: PyTorch, Gymnasium, NumPy
+* **Automation**: Playwright (Async Chrome CDP)
+* **API Gateway & Database**: FastAPI, Uvicorn, SQLModel, SQLAlchemy AsyncIO, aiosqlite
+* **Dashboard Front-end**: Next.js (React), TypeScript, Tailwind CSS, Recharts, Lucide React
 
 ---
 
-### Step D: Initialize the RL Agent Loop
-1. Navigate to `/automation`.
-2. Create and active the virtual environment:
-   ```powershell
-   python -m venv venv
-   .\venv\Scripts\activate
-   ```
-3. Install dependencies:
-   ```powershell
-   pip install -r requirements.txt
-   ```
-4. Start the training script:
-   ```powershell
-   python main.py
-   ```
+## How to Run the Project
 
----
+### 1. Launch Chrome CDP Debug Port
+Close all Google Chrome windows, then launch a fresh Chrome session with remote debugging enabled:
+```powershell
+& "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --user-data-dir="C:\chrome-automation-profile"
+```
+Log into your demo account on the target Penalty game site.
 
-## 2. Dynamic Training Workflow
+### 2. Start the Backend API
+Navigate to the `backend/` directory:
+```bash
+# Activate virtual environment
+.\venv\Scripts\activate
+# Start Uvicorn backend
+uvicorn app.main:app --reload
+```
 
-1. Open the **Dashboard** at `localhost:3000`. You will see the WebSocket status badge turn `CONNECTED`.
-2. Adjust the **Demo Stake** and **Action Interval Delay** sliders to your preference.
-3. Click the **Start RL Training** button. The dashboard will trigger the Python bot to begin.
-4. The bot attaches to your active Chrome instance on port `9222`, observes the current board multiplier state, evaluates the DQN network to choose an optimal action (excluding already-hit targets), clicks the coordinates in Chrome, detects the round outcome, logs performance telemetry to SQLite, and streams the visual status overlays (Q-value strategy heatmap + viewport frames) back to your dashboard in real time.
+### 3. Run the Automation Scraper & RL Training
+Navigate to the `automation/` directory:
+```bash
+# Activate virtual environment
+.\venv\Scripts\activate
+# Start orchestrator training
+python main.py
+```
+*(The terminal will display instructions to verify manual account authentication in Chrome before handoff is triggered.)*
+
+### 4. Run the Web Dashboard Portal
+Navigate to the `frontend/` directory:
+```bash
+npm install
+npm run dev
+```
+Open `http://localhost:3000` to control the training runs, adjust bet sizing and delays, and observe the agent's strategy heatmap live.
